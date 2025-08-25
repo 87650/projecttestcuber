@@ -4,7 +4,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def hello():
-    return "Привет"
+    return "Привет медвед"
 
 if __name__ == "__main__":
     # запуск на 0.0.0.0, чтобы контейнер был доступен извне
