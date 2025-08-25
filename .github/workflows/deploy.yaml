@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.5.4
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+    - name: Copy files to Ubuntu machine
+      run: |
+        ssh -o StrictHostKeyChecking=no ubuntu@localhost "
+          mkdir -p /tmp/build_${{ github.sha }} &&
+          cd /tmp/build_${{ github.sha }} &&
+          rm -rf * .[^.]* 2>/dev/null || true
+        "
+        scp -o StrictHostKeyChecking=no -r ./* ubuntu@localhost:/tmp/build_${{ github.sha }}/
+
+    - name: Build and push Docker image
+      run: |
+        ssh -o StrictHostKeyChecking=no ubuntu@localhost "
+          cd /tmp/build_${{ github.sha }} &&
+          docker build -t localhost:5000/python-app:${{ github.sha }} . &&
+          docker push localhost:5000/python-app:${{ github.sha }}
+        "
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.25.0'
+
+    - name: Configure Kubernetes access
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Deploy to Kubernetes
+      run: |
+        # Обновляем образ в deployment
+        kubectl set image deployment/python-app python-app=localhost:5000/python-app:${{ github.sha }}
+        # Применяем манифесты
+        kubectl apply -f k8s/
+        # Ждем обновления
+        kubectl rollout status deployment/python-app --timeout=300s
+
+    - name: Cleanup
+      run: |
+        ssh -o StrictHostKeyChecking=no ubuntu@localhost "
+          rm -rf /tmp/build_${{ github.sha }}
+        "
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods
+        kubectl get services
+        echo "Deployment completed successfully!"
